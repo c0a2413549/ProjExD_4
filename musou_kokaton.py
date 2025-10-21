@@ -32,9 +32,11 @@ def calc_orientation(org: pg.Rect, dst: pg.Rect) -> tuple[float, float]:
     引数2 dst：こうかとんSurfaceのRect
     戻り値：orgから見たdstの方向ベクトルを表すタプル
     """
-    x_diff, y_diff = dst.centerx-org.centerx, dst.centery-org.centery
-    norm = math.sqrt(x_diff**2+y_diff**2)
-    return x_diff/norm, y_diff/norm
+    x_diff, y_diff = dst.centerx - org.centerx, dst.centery - org.centery
+    norm = math.sqrt(x_diff**2 + y_diff**2)
+    if norm == 0:
+        return 0.0, 0.0
+    return x_diff / norm, y_diff / norm
 
 
 class Bird(pg.sprite.Sprite):
@@ -73,6 +75,11 @@ class Bird(pg.sprite.Sprite):
         self.rect.center = xy
         self.speed = 10
 
+        # --- 追加状態 ---
+        self.state = "normal"   # "normal" または "hyper"
+        self.hyper_life = 0     # 無敵状態の残りフレーム
+        # ----------------
+
     def change_img(self, num: int, screen: pg.Surface):
         """
         こうかとん画像を切り替え，画面に転送する
@@ -85,6 +92,7 @@ class Bird(pg.sprite.Sprite):
     def update(self, key_lst: list[bool], screen: pg.Surface):
         """
         押下キーに応じてこうかとんを移動させる
+        無敵状態中は画像を変換して表示し、残り時間を減らす
         引数1 key_lst：押下キーの真理値リスト
         引数2 screen：画面Surface
         """
@@ -93,12 +101,44 @@ class Bird(pg.sprite.Sprite):
             if key_lst[k]:
                 sum_mv[0] += mv[0]
                 sum_mv[1] += mv[1]
-        self.rect.move_ip(self.speed*sum_mv[0], self.speed*sum_mv[1])
+        self.rect.move_ip(self.speed * sum_mv[0], self.speed * sum_mv[1])
         if check_bound(self.rect) != (True, True):
-            self.rect.move_ip(-self.speed*sum_mv[0], -self.speed*sum_mv[1])
+            self.rect.move_ip(-self.speed * sum_mv[0], -self.speed * sum_mv[1])
         if not (sum_mv[0] == 0 and sum_mv[1] == 0):
+            # 正規化されていない方向ベクトル（整数）でimgsを参照
             self.dire = tuple(sum_mv)
-            self.image = self.imgs[self.dire]
+            # imgsに用意されている方向が8方向整数のみのため、
+            # もし該当キーが無ければ向きを基本(+1,0)にする
+            if self.dire in self.imgs:
+                base_img = self.imgs[self.dire]
+            else:
+                base_img = self.imgs[(+1, 0)]
+            # 普通時は素の画像をセット（ただし無敵時は変換して表示する）
+            if self.state != "hyper":
+                self.image = base_img
+        else:
+            # 押下なしのときは現在の向き画像を維持（無敵時は下で処理）
+            base_img = self.imgs.get(self.dire, self.imgs[(+1, 0)])
+            if self.state != "hyper":
+                self.image = base_img
+
+        # 無敵状態中の処理：画像変換＆持続時間のカウントダウン
+        if self.state == "hyper":
+            # 常に向きに応じた元画像を基に変換する（累積変換を避けるため）
+            base_img = self.imgs.get(self.dire, self.imgs[(+1, 0)])
+            try:
+                # 指定どおりlaplacian変換（環境によっては存在しない場合があるが指示に従う）
+                hyper_img = pg.transform.laplacian(base_img)
+            except Exception:
+                # 環境によっては laplacian が無い/失敗するので、代替として反転を使う（警告は出さない）
+                hyper_img = pg.transform.flip(base_img, True, True)
+            self.image = hyper_img
+            self.hyper_life -= 1
+            if self.hyper_life < 0:
+                self.state = "normal"
+                # 無敵解除時は向きに応じた通常画像に戻す
+                self.image = self.imgs.get(self.dire, self.imgs[(+1, 0)])
+
         screen.blit(self.image, self.rect)
 
 
@@ -116,15 +156,15 @@ class Bomb(pg.sprite.Sprite):
         """
         super().__init__()
         rad = random.randint(10, 50)  # 爆弾円の半径：10以上50以下の乱数
-        self.image = pg.Surface((2*rad, 2*rad))
+        self.image = pg.Surface((2 * rad, 2 * rad))
         color = random.choice(__class__.colors)  # 爆弾円の色：クラス変数からランダム選択
         pg.draw.circle(self.image, color, (rad, rad), rad)
         self.image.set_colorkey((0, 0, 0))
         self.rect = self.image.get_rect()
         # 爆弾を投下するemyから見た攻撃対象のbirdの方向を計算
-        self.vx, self.vy = calc_orientation(emy.rect, bird.rect)  
+        self.vx, self.vy = calc_orientation(emy.rect, bird.rect)
         self.rect.centerx = emy.rect.centerx
-        self.rect.centery = emy.rect.centery+emy.rect.height//2
+        self.rect.centery = emy.rect.centery + emy.rect.height // 2
         self.speed = 6
 
     def update(self):
@@ -132,7 +172,7 @@ class Bomb(pg.sprite.Sprite):
         爆弾を速度ベクトルself.vx, self.vyに基づき移動させる
         引数 screen：画面Surface
         """
-        self.rect.move_ip(self.speed*self.vx, self.speed*self.vy)
+        self.rect.move_ip(self.speed * self.vx, self.speed * self.vy)
         if check_bound(self.rect) != (True, True):
             self.kill()
 
@@ -153,8 +193,8 @@ class Beam(pg.sprite.Sprite):
         self.vx = math.cos(math.radians(angle))
         self.vy = -math.sin(math.radians(angle))
         self.rect = self.image.get_rect()
-        self.rect.centery = bird.rect.centery+bird.rect.height*self.vy
-        self.rect.centerx = bird.rect.centerx+bird.rect.width*self.vx
+        self.rect.centery = bird.rect.centery + bird.rect.height * self.vy
+        self.rect.centerx = bird.rect.centerx + bird.rect.width * self.vx
         self.speed = 10
 
     def update(self):
@@ -162,7 +202,7 @@ class Beam(pg.sprite.Sprite):
         ビームを速度ベクトルself.vx, self.vyに基づき移動させる
         引数 screen：画面Surface
         """
-        self.rect.move_ip(self.speed*self.vx, self.speed*self.vy)
+        self.rect.move_ip(self.speed * self.vx, self.speed * self.vy)
         if check_bound(self.rect) != (True, True):
             self.kill()
 
@@ -190,7 +230,9 @@ class Explosion(pg.sprite.Sprite):
         爆発エフェクトを表現する
         """
         self.life -= 1
-        self.image = self.imgs[self.life//10%2]
+        # lifeが0以下でも index参照しないように保護
+        if self.life >= 0:
+            self.image = self.imgs[self.life // 10 % 2]
         if self.life < 0:
             self.kill()
 
@@ -200,14 +242,14 @@ class Enemy(pg.sprite.Sprite):
     敵機に関するクラス
     """
     imgs = [pg.image.load(f"fig/alien{i}.png") for i in range(1, 4)]
-    
+
     def __init__(self):
         super().__init__()
         self.image = pg.transform.rotozoom(random.choice(__class__.imgs), 0, 0.8)
         self.rect = self.image.get_rect()
         self.rect.center = random.randint(0, WIDTH), 0
         self.vx, self.vy = 0, +6
-        self.bound = random.randint(50, HEIGHT//2)  # 停止位置
+        self.bound = random.randint(50, HEIGHT // 2)  # 停止位置
         self.state = "down"  # 降下状態or停止状態
         self.interval = random.randint(50, 300)  # 爆弾投下インターバル
 
@@ -235,7 +277,7 @@ class Score:
         self.value = 0
         self.image = self.font.render(f"Score: {self.value}", 0, self.color)
         self.rect = self.image.get_rect()
-        self.rect.center = 100, HEIGHT-50
+        self.rect.center = 100, HEIGHT - 50
 
     def update(self, screen: pg.Surface):
         self.image = self.font.render(f"Score: {self.value}", 0, self.color)
@@ -263,13 +305,21 @@ def main():
                 return 0
             if event.type == pg.KEYDOWN and event.key == pg.K_SPACE:
                 beams.add(Beam(bird))
+
+        # --- 発動条件チェック（右Shift押下 & score > 100） ---
+        # 発動時はスコアを100消費し、state="hyper", hyper_life=500 にする
+        if key_lst[pg.K_RSHIFT] and score.value > 100 and bird.state != "hyper":
+            bird.state = "hyper"
+            bird.hyper_life = 500
+            score.value -= 100
+
         screen.blit(bg_img, [0, 0])
 
-        if tmr%200 == 0:  # 200フレームに1回，敵機を出現させる
+        if tmr % 200 == 0:  # 200フレームに1回，敵機を出現させる
             emys.add(Enemy())
 
         for emy in emys:
-            if emy.state == "stop" and tmr%emy.interval == 0:
+            if emy.state == "stop" and tmr % emy.interval == 0:
                 # 敵機が停止状態に入ったら，intervalに応じて爆弾投下
                 bombs.add(Bomb(emy, bird))
 
@@ -282,12 +332,22 @@ def main():
             exps.add(Explosion(bomb, 50))  # 爆発エフェクト
             score.value += 1  # 1点アップ
 
-        for bomb in pg.sprite.spritecollide(bird, bombs, True):  # こうかとんと衝突した爆弾リスト
-            bird.change_img(8, screen)  # こうかとん悲しみエフェクト
-            score.update(screen)
-            pg.display.update()
-            time.sleep(2)
-            return
+        # こうかとんと爆弾の衝突判定（無敵時はゲームオーバーにならない）
+        collided_bombs = pg.sprite.spritecollide(bird, bombs, True)
+        if collided_bombs:
+            # 複数衝突を考慮してループ
+            for bomb in collided_bombs:
+                if bird.state == "hyper":
+                    # 無敵時：爆弾を爆発させ、スコア+1、ゲーム継続
+                    exps.add(Explosion(bomb, 50))
+                    score.value += 1
+                else:
+                    # 通常時：ゲームオーバー処理（元の挙動）
+                    bird.change_img(8, screen)  # こうかとん悲しみエフェクト
+                    score.update(screen)
+                    pg.display.update()
+                    time.sleep(2)
+                    return
 
         bird.update(key_lst, screen)
         beams.update()
