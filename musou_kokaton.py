@@ -141,14 +141,15 @@ class Beam(pg.sprite.Sprite):
     """
     ビームに関するクラス
     """
-    def __init__(self, bird: Bird):
+    def __init__(self, bird: Bird, angle0=0):  #angle0をデフォルトの値0で追加
         """
         ビーム画像Surfaceを生成する
         引数 bird：ビームを放つこうかとん
         """
         super().__init__()
         self.vx, self.vy = bird.dire
-        angle = math.degrees(math.atan2(-self.vy, self.vx))
+
+        angle = math.degrees(math.atan2(-self.vy, self.vx)) + angle0  #angle0をビームの回転角度に加算
         self.image = pg.transform.rotozoom(pg.image.load(f"fig/beam.png"), angle, 1.0)
         self.vx = math.cos(math.radians(angle))
         self.vy = -math.sin(math.radians(angle))
@@ -165,6 +166,38 @@ class Beam(pg.sprite.Sprite):
         self.rect.move_ip(self.speed*self.vx, self.speed*self.vy)
         if check_bound(self.rect) != (True, True):
             self.kill()
+
+
+class NeoBeam(pg.sprite.Sprite):  #新たにNeoBeamクラスを追加
+    """
+    複数のビームを出すためのクラス
+    """
+    def __init__(self, bird: Bird, num: int):  #イニシャライザの引数をこうかとんbirdとビーム数numに
+        self.bird=bird
+        self.num=num  #ここの数字でビームの数を決定
+    
+    def gen_beams(self) -> list[Beam]:
+        """
+        numに応じて角度を計算し、Beamのリストを返す
+        """
+        beams = []
+        if self.num <= 0:
+            return beams
+        
+        # numが1の場合は角度0のビームを1本生成
+        if self.num == 1:
+            beams.append(Beam(self.bird))
+            return beams
+            
+        # num > 1 の場合：角度の範囲num-1で割ってステップを求める
+        step = 100 / (self.num - 1)
+        
+        for i in range(self.num):
+            # i = 0 のとき -50, i = num-1 のとき +50 となるように angle0 を計算
+            angle0 = -50 + step * i
+            beams.append(Beam(self.bird, angle0))
+            
+        return beams
 
 
 class Explosion(pg.sprite.Sprite):
@@ -262,7 +295,12 @@ def main():
             if event.type == pg.QUIT:
                 return 0
             if event.type == pg.KEYDOWN and event.key == pg.K_SPACE:
-                beams.add(Beam(bird))
+                if key_lst[pg.K_LSHIFT]:
+                    # 弾幕発射 (num=5)
+                    neo_beam = NeoBeam(bird, 5)
+                    beams.add(neo_beam.gen_beams()) # 複数のビームをリストで追加
+                else:
+                    beams.add(Beam(bird))
         screen.blit(bg_img, [0, 0])
 
         if tmr%200 == 0:  # 200フレームに1回，敵機を出現させる
