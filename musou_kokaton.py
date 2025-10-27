@@ -80,7 +80,6 @@ class Bird(pg.sprite.Sprite):
         self.hyper_life = 0     # 無敵状態の残りフレーム
         # ----------------
 
-
     def change_img(self, num: int, screen: pg.Surface):
         """
         こうかとん画像を切り替え，画面に転送する
@@ -102,8 +101,12 @@ class Bird(pg.sprite.Sprite):
             if key_lst[k]:
                 sum_mv[0] += mv[0]
                 sum_mv[1] += mv[1]
-            if key_lst[pg.K_LSHIFT]:
-                self.speed = 20     
+        
+        # LSHIFTキーが押されている間はスピードアップ
+        if key_lst[pg.K_LSHIFT]:
+            self.speed = 20
+        else:
+            self.speed = 10  # 押されていない時は元のスピードに
 
         self.rect.move_ip(self.speed * sum_mv[0], self.speed * sum_mv[1])
         if check_bound(self.rect) != (True, True):
@@ -172,7 +175,6 @@ class Bomb(pg.sprite.Sprite):
         self.speed = 6
         self.state = "active"
 
-
     def update(self):
         """
         爆弾を速度ベクトルself.vx, self.vyに基づき移動させる
@@ -187,14 +189,15 @@ class Beam(pg.sprite.Sprite):
     """
     ビームに関するクラス
     """
-    def __init__(self, bird: Bird):
+    def __init__(self, bird: Bird, angle0=0):  #angle0をデフォルトの値0で追加
         """
         ビーム画像Surfaceを生成する
         引数 bird：ビームを放つこうかとん
         """
         super().__init__()
         self.vx, self.vy = bird.dire
-        angle = math.degrees(math.atan2(-self.vy, self.vx))
+
+        angle = math.degrees(math.atan2(-self.vy, self.vx)) + angle0  #angle0をビームの回転角度に加算
         self.image = pg.transform.rotozoom(pg.image.load(f"fig/beam.png"), angle, 1.0)
         self.vx = math.cos(math.radians(angle))
         self.vy = -math.sin(math.radians(angle))
@@ -211,6 +214,38 @@ class Beam(pg.sprite.Sprite):
         self.rect.move_ip(self.speed * self.vx, self.speed * self.vy)
         if check_bound(self.rect) != (True, True):
             self.kill()
+
+
+class NeoBeam(pg.sprite.Sprite):  #新たにNeoBeamクラスを追加
+    """
+    複数のビームを出すためのクラス
+    """
+    def __init__(self, bird: Bird, num: int):  #イニシャライザの引数をこうかとんbirdとビーム数numに
+        self.bird=bird
+        self.num=num  #ここの数字でビームの数を決定
+    
+    def gen_beams(self) -> list[Beam]:
+        """
+        numに応じて角度を計算し、Beamのリストを返す
+        """
+        beams = []
+        if self.num <= 0:
+            return beams
+        
+        # numが1の場合は角度0のビームを1本生成
+        if self.num == 1:
+            beams.append(Beam(self.bird))
+            return beams
+            
+        # num > 1 の場合：角度の範囲num-1で割ってステップを求める
+        step = 100 / (self.num - 1)
+        
+        for i in range(self.num):
+            # i = 0 のとき -50, i = num-1 のとき +50 となるように angle0 を計算
+            angle0 = -50 + step * i
+            beams.append(Beam(self.bird, angle0))
+            
+        return beams
 
 
 class Explosion(pg.sprite.Sprite):
@@ -280,7 +315,7 @@ class Score:
     def __init__(self):
         self.font = pg.font.Font(None, 50)
         self.color = (0, 0, 255)
-        self.value = 0
+        self.value = 1000
         self.image = self.font.render(f"Score: {self.value}", 0, self.color)
         self.rect = self.image.get_rect()
         self.rect.center = 100, HEIGHT - 50
@@ -394,34 +429,43 @@ def main():
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 return 0
+            
             if event.type == pg.KEYDOWN:
+                # K_SPACE: ビーム発射 (LSHIFT同時押しでNeoBeam)
                 if event.key == pg.K_SPACE:
-                    beams.add(Beam(bird))
+                    if key_lst[pg.K_LSHIFT]:
+                        # 弾幕発射 (num=5)
+                        neo_beam = NeoBeam(bird, 5)
+                        beams.add(neo_beam.gen_beams()) # 複数のビームをリストで追加
+                    else:
+                        beams.add(Beam(bird))
+                
+                # K_s: シールド発動
+                if event.key == pg.K_s and score.value >= 50 and len(shield) == 0:
+                    # 防御壁発動条件：スコア50以上＆壁が存在しない
+                    shield.add(Shield(bird))
+                    score.value -= 50
+                
+                # K_RETURN: 重力場発動
+                if event.key == pg.K_RETURN:
+                    if score.value > 200:
+                        score.value -= 200
+                        gra = Gravity(400)
+                        gravity.add(gra)
+
+                # K_e: EMP発動
+                if event.key == pg.K_e:
+                    if score.value > 20 and len(emps) ==0:
+                        score.value -=20
+                        emps.add(EMP(emys,bombs,screen))
 
         # --- 発動条件チェック（右Shift押下 & score > 100） ---
+        # (KEYDOWNイベントではなく、押下状態 key_lst で判定)
         # 発動時はスコアを100消費し、state="hyper", hyper_life=500 にする
         if key_lst[pg.K_RSHIFT] and score.value > 100 and bird.state != "hyper":
             bird.state = "hyper"
             bird.hyper_life = 500
             score.value -= 100
-
-            if event.key == pg.K_s and score.value >= 50 and len(shield) == 0:
-                    # 防御壁発動条件：スコア50以上＆壁が存在しない
-                    shield.add(Shield(bird))
-                    score.value -= 50
-
-            # if event.type == pg.K_LSHIFT:
-            #    Bird.speed = 20     
-            if event.type == pg.KEYDOWN and event.key == pg.K_RETURN:
-                if score.value > 200:
-                    score.value -= 200
-                    gra = Gravity(400)
-                    gravity.add(gra)
-
-            if event.type == pg.KEYDOWN and event.key == pg.K_e:
-                if score.value > 20 and len(emps) ==0:
-                    score.value -=20
-                    emps.add(EMP(emys,bombs,screen))
             
         screen.blit(bg_img, [0, 0])
 
